@@ -20,7 +20,7 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
-
+ 
 # 3. GESTION DE LA SESSION (Vérification et persistance)
 if "user_data" not in st.session_state:
     session = db.supabase.auth.get_session()

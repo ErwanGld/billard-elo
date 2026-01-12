@@ -160,6 +160,16 @@ class DBManager:
             .execute()
         )
 
+    def accept_rejection(self, match_id):
+        """Le gagnant accepte le rejet de l'adversaire, le match est classé sans suite"""
+        try:
+            self.supabase.table("matches").update(
+                {"status": "rejected_confirmed"}  # Nouveau statut pour clore le dossier
+            ).eq("id", match_id).execute()
+            return True, "Rejet accepté."
+        except Exception as e:
+            return False, f"Erreur : {e}"
+
     def validate_match_logic(self, match_id):
         try:
             # 1. Récupération sécurisée des données du match

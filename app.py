@@ -20,7 +20,7 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
- 
+
 # 3. GESTION DE LA SESSION (Vérification et persistance)
 if "user_data" not in st.session_state:
     session = db.supabase.auth.get_session()
@@ -77,8 +77,7 @@ if st.session_state.user_data is None:
     st.stop()
 
 # --- SI CONNECTÉ : MISE À JOUR DES INFOS EN DIRECT ---
-# On recharge systématiquement le profil depuis Supabase
-# pour synchroniser l'Elo sidebar et leaderboard
+# Synchronisation de l'Elo sidebar et leaderboard
 current_id = st.session_state.user_data["id"]
 fresh_user = (
     db.supabase.table("profiles").select("*").eq("id", current_id).single().execute()
@@ -146,14 +145,25 @@ elif page == "🎯 Déclarer un match":
     for w in my_wins:
         status = w["status"]
         adv = w.get("profiles", {}).get("username", "Inconnu")
+
         if status == "rejected":
-            c1, c2 = st.columns([3, 1])
-            c1.error(f"Victoire contre {adv} refusée")
-            if c2.button("Contester ⚖️", key=f"disp_{w['id']}"):
-                db.dispute_match(w["id"])
-                st.rerun()
+            st.error(f"Victoire contre {adv} refusée")
+            c1, c2 = st.columns(2)
+            with c1:
+                if st.button("Accepter le rejet ✅", key=f"acc_{w['id']}"):
+                    db.accept_rejection(
+                        w["id"]
+                    )  # Nécessite la fonction dans DB_manager
+                    st.rerun()
+            with c2:
+                if st.button("Contester ⚖️", key=f"disp_{w['id']}"):
+                    db.dispute_match(w["id"])
+                    st.rerun()
+
         elif status == "disputed":
             st.warning(f"⚖️ Litige en cours contre {adv}")
+        elif status == "rejected_confirmed":
+            st.info(f"Match contre {adv} : Rejet accepté")
         else:
             st.write(f"Match contre {adv} : {status.upper()}")
 
@@ -184,7 +194,14 @@ elif page == "🔧 Panel Admin":
 
     status_filter = st.multiselect(
         "Statuts :",
-        ["pending", "validated", "rejected", "disputed", "revoked"],
+        [
+            "pending",
+            "validated",
+            "rejected",
+            "disputed",
+            "revoked",
+            "rejected_confirmed",
+        ],
         default=["disputed", "pending"],
     )
 
@@ -210,9 +227,7 @@ elif page == "🔧 Panel Admin":
                             f"Gagnant: {m['winner']['username']} | Perdant: {m['loser']['username']}"
                         )
                         if m["status"] == "validated":
-                            st.warning(
-                                "Ce match a été validé. Les points ont été transférés."
-                            )
+                            st.warning("Match validé. Points transférés.")
                             if st.button("Révoquer le match ⚠️", key=f"rev_{m['id']}"):
                                 success, msg = db.revoke_match(m["id"])
                                 if success:

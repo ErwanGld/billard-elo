@@ -9,7 +9,7 @@ SECRET_INVITE_CODE = st.secrets["INVITE_CODE"]
 
 # 1. Configuration de la page
 st.set_page_config(
-    page_title="Billard Club - Ranking",
+    page_title="🎱 BlackBall Compétition",
     page_icon="🎱",  # Ici, l'emoji 🎱 remplacera la couronne orange
     layout="centered",
 )
@@ -105,10 +105,25 @@ fresh_user = (
 user = fresh_user.data
 st.session_state.user_data = user
 
-# Sidebar
+# --- CALCUL DU RANG ---
+# On récupère tous les profils triés par Elo
+leaderboard_data = db.get_leaderboard().data
+# On trouve la position (index + 1) de l'utilisateur actuel
+try:
+    # On cherche l'index de l'utilisateur dont l'ID correspond à l'ID connecté
+    user_rank = (
+        next(i for i, p in enumerate(leaderboard_data) if p["id"] == user["id"]) + 1
+    )
+except:
+    user_rank = "?"  # Au cas où il n'est pas encore dans le classement
+
+# --- BARRE LATÉRALE ---
 st.sidebar.title("🎱 BlackBall Compétition")
 st.sidebar.write(f"Joueur : **{user['username']}**")
-st.sidebar.write(f"Rang : **{user['elo_rating']} pts**")
+
+# Affichage des deux lignes demandées
+st.sidebar.write(f"Rang : **#{user_rank}**")
+st.sidebar.write(f"Elo : **{user['elo_rating']}**")  # Sans "pts" derrière
 
 menu_options = ["🏆 Classement", "🎯 Déclarer un match", "📑 Mes validations"]
 if user.get("is_admin"):

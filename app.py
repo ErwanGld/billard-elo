@@ -1,9 +1,9 @@
 import streamlit as st
 from DB_manager import DBManager
 import pandas as pd
+import extra_streamlit_components as stx
 
 # --- CONFIGURATION DU CODE SECRET ---
-# Récupéré depuis les secrets de Streamlit Cloud pour la sécurité
 SECRET_INVITE_CODE = st.secrets["INVITE_CODE"]
 
 # 1. Configuration de la page
@@ -13,8 +13,9 @@ st.set_page_config(
     layout="centered",
 )
 
-# 2. Initialisation du manager
+# 2. Initialisation du manager et du CookieManager
 db = DBManager()
+cookie_manager = stx.CookieManager()
 
 # --- STYLE CSS ---
 st.markdown(
@@ -28,25 +29,39 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# 3. GESTION DE LA SESSION (Persistance après refresh)
+# 3. GESTION DE LA SESSION (Persistance par Cookies)
 if "user_data" not in st.session_state or st.session_state.user_data is None:
-    try:
-        # On tente de récupérer la session active via le stockage local/cookies
-        session = db.supabase.auth.get_session()
-        if session and session.user:
-            user_id = session.user.id
+    # On vérifie si un cookie de connexion existe
+    saved_user_id = cookie_manager.get("bb_user_id")
+
+    if saved_user_id:
+        try:
             user_profile = (
                 db.supabase.table("profiles")
                 .select("*")
-                .eq("id", user_id)
+                .eq("id", saved_user_id)
                 .single()
                 .execute()
             )
-            st.session_state.user_data = user_profile.data
-        else:
+            if user_profile.data:
+                st.session_state.user_data = user_profile.data
+        except Exception:
             st.session_state.user_data = None
-    except Exception:
-        st.session_state.user_data = None
+    else:
+        # Si pas de cookie, on tente la session Supabase classique
+        try:
+            session = db.supabase.auth.get_session()
+            if session and session.user:
+                user_profile = (
+                    db.supabase.table("profiles")
+                    .select("*")
+                    .eq("id", session.user.id)
+                    .single()
+                    .execute()
+                )
+                st.session_state.user_data = user_profile.data
+        except Exception:
+            st.session_state.user_data = None
 
 # --- ÉCRAN DE CONNEXION / INSCRIPTION ---
 if st.session_state.user_data is None:
@@ -60,10 +75,15 @@ if st.session_state.user_data is None:
             if st.form_submit_button("Se connecter"):
                 try:
                     auth_res = db.log_in(email, pwd)
+                    user_id = auth_res.user.id
+
+                    # SAUVEGARDE DU COOKIE (30 jours)
+                    cookie_manager.set("bb_user_id", user_id, key="set_cookie_login")
+
                     user_profile = (
                         db.supabase.table("profiles")
                         .select("*")
-                        .eq("id", auth_res.user.id)
+                        .eq("id", user_id)
                         .single()
                         .execute()
                     )
@@ -128,6 +148,8 @@ if user.get("is_admin"):
 page = st.sidebar.radio("Navigation", menu_options)
 
 if st.sidebar.button("Déconnexion"):
+    # SUPPRESSION DU COOKIE
+    cookie_manager.delete("bb_user_id", key="delete_logout")
     db.supabase.auth.sign_out()
     st.session_state.user_data = None
     st.rerun()

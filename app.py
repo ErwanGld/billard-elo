@@ -4,7 +4,8 @@ import pandas as pd
 
 # --- CONFIGURATION DU CODE SECRET ---
 # Change ce code par celui de ton choix avant de le mettre sur GitHub
-SECRET_INVITE_CODE = "BILLARD2026"
+# On va chercher le code directement dans les secrets sécurisés
+SECRET_INVITE_CODE = st.secrets["INVITE_CODE"]
 
 # 1. Configuration de la page
 st.set_page_config(page_title="Billard Elo School", page_icon="🎱", layout="centered")

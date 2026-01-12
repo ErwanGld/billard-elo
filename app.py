@@ -8,8 +8,11 @@ import pandas as pd
 SECRET_INVITE_CODE = st.secrets["INVITE_CODE"]
 
 # 1. Configuration de la page
-st.set_page_config(page_title="Billard Elo School", page_icon="🎱", layout="centered")
-
+st.set_page_config(
+    page_title="Billard Club - Ranking",
+    page_icon="🎱",  # Ici, l'emoji 🎱 remplacera la couronne orange
+    layout="centered",
+)
 # 2. Initialisation du manager
 db = DBManager()
 
@@ -43,7 +46,7 @@ if "user_data" not in st.session_state:
 
 # --- ÉCRAN DE CONNEXION / INSCRIPTION ---
 if st.session_state.user_data is None:
-    st.title("🎱 Billard Elo Ranking")
+    st.title("🎱 BlackBall Compétition")
     tab1, tab2 = st.tabs(["Connexion", "Créer un compte"])
 
     with tab1:
@@ -103,7 +106,7 @@ user = fresh_user.data
 st.session_state.user_data = user
 
 # Sidebar
-st.sidebar.title("🎱 Billard Club")
+st.sidebar.title("🎱 BlackBall Compétition")
 st.sidebar.write(f"Joueur : **{user['username']}**")
 st.sidebar.write(f"Rang : **{user['elo_rating']} pts**")
 

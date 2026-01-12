@@ -2,6 +2,10 @@ import streamlit as st
 from DB_manager import DBManager
 import pandas as pd
 
+# --- CONFIGURATION DU CODE SECRET ---
+# Change ce code par celui de ton choix avant de le mettre sur GitHub
+SECRET_INVITE_CODE = "BILLARD2026"
+
 # 1. Configuration de la page
 st.set_page_config(page_title="Billard Elo School", page_icon="🎱", layout="centered")
 
@@ -13,15 +17,14 @@ st.markdown(
     """
     <style>
     .main { background-color: #0e1117; }
-    stButton>button { width: 100%; border-radius: 5px;
-     height: 3em; background-color: #2ecc71; color: white; }
+    stButton>button { width: 100%; border-radius: 5px; height: 3em; background-color: #2ecc71; color: white; }
     .stDataFrame { background-color: #1f2937; border-radius: 10px; }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
-# 3. GESTION DE LA SESSION (Vérification et persistance)
+# 3. GESTION DE LA SESSION
 if "user_data" not in st.session_state:
     session = db.supabase.auth.get_session()
     if session:
@@ -63,21 +66,34 @@ if st.session_state.user_data is None:
                     st.error("Identifiants incorrects.")
 
     with tab2:
-        st.info("Utilisez votre email pour vous inscrire.")
+        st.info("⚠️ Un code d'invitation est requis pour s'inscrire.")
         with st.form("signup_form"):
             new_email = st.text_input("Email")
             new_pwd = st.text_input("Mot de passe (6 caractères min.)", type="password")
             new_pseudo = st.text_input("Pseudo choisi")
+            # Champ pour le code secret
+            user_invite_code = st.text_input(
+                "Code d'invitation secret", type="password"
+            )
+
             if st.form_submit_button("S'inscrire"):
-                try:
-                    db.sign_up(new_email, new_pwd, new_pseudo)
-                    st.success("Compte créé ! Connectez-vous.")
-                except Exception as e:
-                    st.error(f"Erreur : {e}")
+                if user_invite_code != SECRET_INVITE_CODE:
+                    st.error(
+                        "❌ Code d'invitation incorrect. Demandez-le à l'administrateur."
+                    )
+                elif not new_email or not new_pwd or not new_pseudo:
+                    st.warning("Veuillez remplir tous les champs.")
+                else:
+                    try:
+                        db.sign_up(new_email, new_pwd, new_pseudo)
+                        st.success(
+                            "✅ Compte créé ! Connectez-vous dans l'onglet 'Connexion'."
+                        )
+                    except Exception as e:
+                        st.error(f"Erreur : {e}")
     st.stop()
 
 # --- SI CONNECTÉ : MISE À JOUR DES INFOS EN DIRECT ---
-# Synchronisation de l'Elo sidebar et leaderboard
 current_id = st.session_state.user_data["id"]
 fresh_user = (
     db.supabase.table("profiles").select("*").eq("id", current_id).single().execute()
@@ -85,12 +101,11 @@ fresh_user = (
 user = fresh_user.data
 st.session_state.user_data = user
 
-# Barre latérale
+# Sidebar
 st.sidebar.title("🎱 Billard Club")
 st.sidebar.write(f"Joueur : **{user['username']}**")
 st.sidebar.write(f"Rang : **{user['elo_rating']} pts**")
 
-# Construction du menu
 menu_options = ["🏆 Classement", "🎯 Déclarer un match", "📑 Mes validations"]
 if user.get("is_admin"):
     menu_options.append("🔧 Panel Admin")
@@ -115,8 +130,6 @@ if page == "🏆 Classement":
 
 elif page == "🎯 Déclarer un match":
     st.header("🎯 Enregistrer un résultat")
-    st.write("Déclarez votre victoire. Votre adversaire devra confirmer.")
-
     players_res = db.get_leaderboard()
     adversaires = [p for p in players_res.data if p["id"] != user["id"]]
 
@@ -141,25 +154,20 @@ elif page == "🎯 Déclarer un match":
         .execute()
         .data
     )
-
     for w in my_wins:
         status = w["status"]
         adv = w.get("profiles", {}).get("username", "Inconnu")
-
         if status == "rejected":
             st.error(f"Victoire contre {adv} refusée")
             c1, c2 = st.columns(2)
             with c1:
                 if st.button("Accepter le rejet ✅", key=f"acc_{w['id']}"):
-                    db.accept_rejection(
-                        w["id"]
-                    )  # Nécessite la fonction dans DB_manager
+                    db.accept_rejection(w["id"])
                     st.rerun()
             with c2:
                 if st.button("Contester ⚖️", key=f"disp_{w['id']}"):
                     db.dispute_match(w["id"])
                     st.rerun()
-
         elif status == "disputed":
             st.warning(f"⚖️ Litige en cours contre {adv}")
         elif status == "rejected_confirmed":
@@ -170,7 +178,6 @@ elif page == "🎯 Déclarer un match":
 elif page == "📑 Mes validations":
     st.header("📑 Matchs à confirmer")
     pending = db.get_pending_matches(user["id"]).data
-
     if not pending:
         st.write("Aucun match en attente.")
     else:
@@ -191,7 +198,6 @@ elif page == "📑 Mes validations":
 elif page == "🔧 Panel Admin":
     st.header("🔧 Outils d'administration")
     all_matches = db.get_all_matches().data
-
     status_filter = st.multiselect(
         "Statuts :",
         [
@@ -204,10 +210,7 @@ elif page == "🔧 Panel Admin":
         ],
         default=["disputed", "pending"],
     )
-
-    if not all_matches:
-        st.info("Aucun match enregistré.")
-    else:
+    if all_matches:
         for m in all_matches:
             if m["status"] in status_filter:
                 with st.expander(
@@ -222,16 +225,9 @@ elif page == "🔧 Panel Admin":
                         if c2.button("Confirmer Rejet ❌", key=f"f_r_{m['id']}"):
                             db.reject_match(m["id"])
                             st.rerun()
-                    else:
-                        st.write(
-                            f"Gagnant: {m['winner']['username']} | Perdant: {m['loser']['username']}"
-                        )
-                        if m["status"] == "validated":
-                            st.warning("Match validé. Points transférés.")
-                            if st.button("Révoquer le match ⚠️", key=f"rev_{m['id']}"):
-                                success, msg = db.revoke_match(m["id"])
-                                if success:
-                                    st.success(msg)
-                                    st.rerun()
-                                else:
-                                    st.error(msg)
+                    elif m["status"] == "validated":
+                        st.warning("Match validé. Points transférés.")
+                        if st.button("Révoquer le match ⚠️", key=f"rev_{m['id']}"):
+                            success, msg = db.revoke_match(m["id"])
+                            if success:
+                                st.rerun()

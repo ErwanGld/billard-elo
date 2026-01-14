@@ -151,7 +151,7 @@ st.sidebar.write(f"Elo : **{user['elo_rating']}**")
 menu_options = [
     "🏆 Classement",
     "🎯 Déclarer un match",
-    "🆚 Face-à-Face",
+    "🆚 Historique des Duels",
     "📑 Mes validations",
 ]
 if user.get("is_admin"):

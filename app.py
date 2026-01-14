@@ -29,14 +29,14 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# 3. GESTION DE LA SESSION (Correction de l'AttributeError)
-# SÉCURITÉ : On initialise la clé si elle est absente pour éviter le crash au premier chargement
+# 3. GESTION DE LA SESSION
+# SÉCURITÉ : On initialise la clé si elle est absente
 if "user_data" not in st.session_state:
     st.session_state.user_data = None
 
 # Tentative de reconnexion automatique via Cookies ou Session Supabase
 if st.session_state.user_data is None:
-    # 1. On vérifie d'abord les cookies (pour le rafraîchissement de page)
+    # 1. On vérifie d'abord les cookies
     saved_user_id = cookie_manager.get("bb_user_id")
 
     if saved_user_id:
@@ -104,7 +104,7 @@ if st.session_state.user_data is None:
         with st.form("signup_form"):
             new_email = st.text_input("Email")
             new_pwd = st.text_input("Mot de passe (6 caractères min.)", type="password")
-            new_pseudo = st.text_input("Prénom Nom (le compte sera supprimé dans le cas contraire)")
+            new_pseudo = st.text_input("Pseudo choisi")
             user_invite_code = st.text_input(
                 "Code d'invitation secret", type="password"
             )
@@ -147,20 +147,22 @@ st.sidebar.write(f"Joueur : **{user['username']}**")
 st.sidebar.write(f"Rang : **#{user_rank}**")
 st.sidebar.write(f"Elo : **{user['elo_rating']}**")
 
-# Ajout de l'option "Face-à-Face" dans le menu
+# MENU NAVIGATION
 menu_options = [
     "🏆 Classement",
     "🎯 Déclarer un match",
-    "🆚 Historique des Duels",
+    "🆚 Face-à-Face",
     "📑 Mes validations",
+    "📜 Règlement",
 ]
 if user.get("is_admin"):
     menu_options.append("🔧 Panel Admin")
 
 page = st.sidebar.radio("Navigation", menu_options)
 
+# BOUTON DÉCONNEXION CORRIGÉ
 if st.sidebar.button("Déconnexion"):
-    cookie_manager.delete("bb_user_id", key="delete_logout")
+    cookie_manager.delete("bb_user_id")
     db.supabase.auth.sign_out()
     st.session_state.user_data = None
     st.rerun()
@@ -223,25 +225,21 @@ elif page == "🎯 Déclarer un match":
         else:
             st.write(f"Match contre {adv} : {status.upper()}")
 
-# --- NOUVELLE SECTION : FACE-À-FACE ---
-elif page == "🆚 Historique des Duels":
+elif page == "🆚 Face-à-Face":
     st.header("🆚 Historique des Duels")
 
-    # 1. Récupérer la liste des adversaires possibles
     players_res = db.get_leaderboard()
     adversaires = [p for p in players_res.data if p["id"] != user["id"]]
 
     if not adversaires:
         st.warning("Pas assez de joueurs pour comparer.")
     else:
-        # Créer un dictionnaire pour retrouver l'ID via le nom
         adv_map = {p["username"]: p["id"] for p in adversaires}
         selected_opponent_name = st.selectbox(
             "Choisir un adversaire :", list(adv_map.keys())
         )
         opponent_id = adv_map[selected_opponent_name]
 
-        # 2. Récupérer TOUS les matchs validés où JE suis impliqué
         response = (
             db.supabase.table("matches")
             .select("*, winner:winner_id(username), loser:loser_id(username)")
@@ -256,32 +254,24 @@ elif page == "🆚 Historique des Duels":
         if not all_my_matches:
             st.info("Vous n'avez pas encore joué de match validé.")
         else:
-            # 3. Filtrer avec Pandas pour ne garder que ceux contre l'adversaire choisi
             df = pd.DataFrame(all_my_matches)
-
-            # On garde les lignes où l'adversaire est soit le vainqueur, soit le perdant
             mask = (df["winner_id"] == opponent_id) | (df["loser_id"] == opponent_id)
             df_duel = df[mask].copy()
 
             if df_duel.empty:
                 st.info(f"Aucun match trouvé contre {selected_opponent_name}.")
             else:
-                # 4. Calcul des statistiques
                 nb_total = len(df_duel)
                 nb_victoires = len(df_duel[df_duel["winner_id"] == user["id"]])
                 nb_defaites = len(df_duel[df_duel["loser_id"] == user["id"]])
-
                 win_rate = (nb_victoires / nb_total) * 100
 
-                # 5. Affichage des KPIs
                 col1, col2, col3 = st.columns(3)
                 col1.metric("Matchs", nb_total)
                 col2.metric("Victoires", f"{nb_victoires}", delta=f"{win_rate:.0f}%")
                 col3.metric("Défaites", f"{nb_defaites}")
 
                 st.divider()
-
-                # 6. Affichage de l'historique détaillé
                 st.subheader(f"Historique contre {selected_opponent_name}")
 
                 display_data = []
@@ -289,7 +279,6 @@ elif page == "🆚 Historique des Duels":
                     is_win = row["winner_id"] == user["id"]
                     res_icon = "✅ VICTOIRE" if is_win else "❌ DÉFAITE"
                     date_str = pd.to_datetime(row["created_at"]).strftime("%d/%m/%Y")
-
                     display_data.append(
                         {
                             "Date": date_str,
@@ -324,6 +313,39 @@ elif page == "📑 Mes validations":
                     if st.button("C'est une erreur ❌", key=f"ref_{m['id']}"):
                         db.reject_match(m["id"])
                         st.rerun()
+
+elif page == "📜 Règlement":
+    st.header("📜 Règlement Officiel")
+    st.markdown(
+        """
+    ### 1. L'Esprit du Jeu 🤝
+    Le but de ce classement est de stimuler la compétition dans une ambiance amicale. Le **fair-play** est la règle absolue. Tout comportement anti-sportif, triche ou manque de respect pourra entraîner une exclusion du classement.
+
+    ### 2. Déroulement et Validation des Matchs 📱
+    * **Article 2.1 - Déclaration :** Seul le **vainqueur** déclare le match sur l'application immédiatement après la fin de la partie.
+    * **Article 2.2 - Validation :** Le perdant doit se connecter et **confirmer sa défaite** dans l'onglet "Mes validations" pour que les points comptent.
+    * **Article 2.3 - Délai :** Tout match non validé sous 48h pourra être traité par un administrateur.
+
+    ### 3. Fonctionnement du Classement Elo 📈
+    * **Départ :** 1000 points.
+    * **Somme nulle :** Les points gagnés par le vainqueur sont retirés au vaincu.
+    * **Logique :** Battre un joueur plus fort rapporte beaucoup de points ("Perf"). Perdre contre un plus faible en coûte beaucoup ("Contre-perf").
+
+    ### 4. Paramètres Techniques ⚙️
+    * **Facteur K = 40 (Fixe) :** Le classement est volontairement dynamique. Une bonne série vous propulse vite vers le sommet.
+    * **Écart type (400) :** Un écart de 400 points signifie 91% de chances de victoire pour le favori.
+
+    ### 5. Intégrité et Interdictions 🚫
+    * **Interdit :** Déclarer des faux matchs, perdre volontairement ("Sandbagging"), ou créer plusieurs comptes ("Smurfing").
+    * **Déconseillé :** "Farmer" le même adversaire 10 fois de suite. Variez les rencontres !
+
+    ### 6. Gestion des Litiges ⚖️
+    En cas d'erreur ou de désaccord, utilisez les boutons de contestation. Les administrateurs trancheront.
+
+    ---
+    > *"Ne jouez pas pour protéger vos points, jouez pour progresser !"*
+    """
+    )
 
 elif page == "🔧 Panel Admin":
     st.header("🔧 Outils d'administration")

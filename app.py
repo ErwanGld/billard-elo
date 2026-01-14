@@ -383,3 +383,25 @@ elif page == "🔧 Panel Admin":
                             success, msg = db.revoke_match(m["id"])
                             if success:
                                 st.rerun()
+
+    # --- AJOUT BOUTON BACKUP ---
+    st.divider()
+    st.subheader("💾 Sauvegarde de sécurité")
+    if st.button("Préparer les fichiers de sauvegarde"):
+        # 1. Récupérer les profils
+        profiles = db.supabase.table("profiles").select("*").execute().data
+        df_prof = pd.DataFrame(profiles)
+        csv_prof = df_prof.to_csv(index=False).encode("utf-8")
+
+        # 2. Récupérer les matchs
+        matches = db.supabase.table("matches").select("*").execute().data
+        df_match = pd.DataFrame(matches)
+        csv_match = df_match.to_csv(index=False).encode("utf-8")
+
+        c1, c2 = st.columns(2)
+        c1.download_button(
+            "📥 Backup Joueurs", csv_prof, "backup_profiles.csv", "text/csv"
+        )
+        c2.download_button(
+            "📥 Backup Matchs", csv_match, "backup_matches.csv", "text/csv"
+        )

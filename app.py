@@ -325,7 +325,9 @@ elif page == "👤 Profils Joueurs":
     # --- 3. AFFICHAGE DE LA COURBE (ALTAIR) ---
     st.subheader("📈 Évolution du classement")
 
-    if len(target_elo_curve) > 0:
+    # CORRECTION ICI : On met "> 1" au lieu de "> 0"
+    # On veut s'assurer qu'il y a au moins un VRAI match joué en plus du point de départ.
+    if len(target_elo_curve) > 1:
         df_curve = pd.DataFrame(target_elo_curve)
 
         chart = (
@@ -347,11 +349,13 @@ elif page == "👤 Profils Joueurs":
         start_elo = 1000
         diff = current_elo - start_elo
 
-        # On affiche le delta en couleur normale (pas vert/rouge relatif à MOI, mais absolu)
         st.metric(f"Elo Actuel de {target_user['username']}", current_elo, delta=diff)
 
     else:
-        st.info(f"{target_user['username']} n'a pas encore joué de match validé.")
+        # C'est ce message qui s'affichera proprement maintenant
+        st.info(
+            f"Pas de statistiques : {target_user['username']} n'a pas encore joué de match validé."
+        )
 
     st.divider()
 

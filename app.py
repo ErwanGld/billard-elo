@@ -2,6 +2,8 @@ import streamlit as st
 from DB_manager import DBManager
 import pandas as pd
 import extra_streamlit_components as stx
+from elo_engine import EloEngine
+import altair as alt
 
 # --- CONFIGURATION DU CODE SECRET ---
 SECRET_INVITE_CODE = st.secrets["INVITE_CODE"]
@@ -190,6 +192,7 @@ st.sidebar.write(f"Elo : **{user['elo_rating']}**")
 # MENU NAVIGATION
 menu_options = [
     "🏆 Classement",
+    "👤 Profils Joueurs",
     "🎯 Déclarer un match",
     "🆚 Historique des Duels",
     "📑 Mes validations",
@@ -239,6 +242,154 @@ if page == "🏆 Classement":
         df.columns = ["Joueur", "Points Elo", "Matchs"]
         st.dataframe(df, use_container_width=True, hide_index=True)
 
+elif page == "👤 Profils Joueurs":
+    # --- 0. SÉLECTION DU JOUEUR À ANALYSER ---
+    # On récupère la liste de tous les joueurs
+    players_res = db.get_leaderboard()
+    if not players_res.data:
+        st.error("Impossible de récupérer les joueurs.")
+        st.stop()
+
+    all_players = players_res.data
+    # On crée un dictionnaire {Pseudo: ID} pour retrouver l'ID facilement
+    players_map = {p["username"]: p for p in all_players}
+
+    # Le menu déroulant (Par défaut sur MOI)
+    options = list(players_map.keys())
+    # On cherche l'index de mon pseudo pour le mettre par défaut
+    try:
+        default_index = options.index(user["username"])
+    except ValueError:
+        default_index = 0
+
+    selected_username = st.selectbox(
+        "Voir le profil de :", options, index=default_index
+    )
+
+    # C'est lui qu'on va regarder (target_user)
+    target_user = players_map[selected_username]
+
+    st.header(f"👤 Profil de {target_user['username']}")
+
+    # --- 1. RÉCUPÉRATION DES DONNÉES ---
+    all_validated_matches = (
+        db.supabase.table("matches")
+        .select("*")
+        .eq("status", "validated")
+        .order("created_at", desc=False)
+        .execute()
+        .data
+    )
+
+    # --- 2. RECONSTRUCTION DE LA COURBE ELO ---
+    elo_history = {u["id"]: 1000 for u in all_players}
+
+    # On prépare la courbe pour le joueur CIBLÉ (target_user)
+    target_elo_curve = [{"Numéro": 0, "Date": "Début", "Elo": 1000, "Adversaire": "-"}]
+
+    engine = EloEngine()
+    match_counter = 0
+
+    for m in all_validated_matches:
+        w_id = m["winner_id"]
+        l_id = m["loser_id"]
+
+        w_elo = elo_history.get(w_id, 1000)
+        l_elo = elo_history.get(l_id, 1000)
+
+        # Calcul
+        new_w, new_l, _ = engine.compute_new_ratings(w_elo, l_elo, 0, 0)
+
+        # Mise à jour globale
+        elo_history[w_id] = new_w
+        elo_history[l_id] = new_l
+
+        # Si le match concerne le joueur CIBLÉ, on l'ajoute à sa courbe
+        if w_id == target_user["id"] or l_id == target_user["id"]:
+            match_counter += 1
+            date_display = pd.to_datetime(m["created_at"]).strftime("%d/%m")
+
+            is_win = w_id == target_user["id"]
+            # Son score après ce match
+            current_elo = new_w if is_win else new_l
+
+            target_elo_curve.append(
+                {
+                    "Numéro": match_counter,
+                    "Date": date_display,
+                    "Elo": current_elo,
+                    "Résultat": "Victoire" if is_win else "Défaite",
+                }
+            )
+
+    # --- 3. AFFICHAGE DE LA COURBE (ALTAIR) ---
+    st.subheader("📈 Évolution du classement")
+
+    if len(target_elo_curve) > 0:
+        df_curve = pd.DataFrame(target_elo_curve)
+
+        chart = (
+            alt.Chart(df_curve)
+            .mark_line(point=True, color="#3498db")
+            .encode(
+                x=alt.X("Numéro", title="Progression (Match après match)"),
+                y=alt.Y("Elo", scale=alt.Scale(zero=False), title="Score Elo"),
+                tooltip=["Date", "Elo", "Résultat"],
+            )
+            .properties(height=400)
+            .interactive()
+        )
+
+        st.altair_chart(chart, use_container_width=True)
+
+        # Indicateur (Stat du joueur ciblé)
+        current_elo = target_elo_curve[-1]["Elo"]
+        start_elo = 1000
+        diff = current_elo - start_elo
+
+        # On affiche le delta en couleur normale (pas vert/rouge relatif à MOI, mais absolu)
+        st.metric(f"Elo Actuel de {target_user['username']}", current_elo, delta=diff)
+
+    else:
+        st.info(f"{target_user['username']} n'a pas encore joué de match validé.")
+
+    st.divider()
+
+    # --- 4. LISTE DES DERNIERS MATCHS DU CIBLÉ ---
+    st.subheader(f"🗓️ Derniers Matchs de {target_user['username']}")
+
+    # On filtre les matchs du joueur CIBLÉ
+    target_matches = [
+        m
+        for m in all_validated_matches
+        if m["winner_id"] == target_user["id"] or m["loser_id"] == target_user["id"]
+    ]
+    target_matches.reverse()  # Du plus récent au plus vieux
+
+    if not target_matches:
+        st.write("Aucun match trouvé.")
+    else:
+        history_data = []
+        # Mapping ID -> Nom pour l'affichage des adversaires
+        id_to_name = {p["id"]: p["username"] for p in all_players}
+
+        for m in target_matches[:10]:
+            is_win = m["winner_id"] == target_user["id"]
+
+            # L'adversaire est celui qui n'est PAS le joueur ciblé
+            opponent_id = m["loser_id"] if is_win else m["winner_id"]
+            opponent_name = id_to_name.get(opponent_id, "Inconnu")
+
+            result_str = "✅ VICTOIRE" if is_win else "❌ DÉFAITE"
+            date_str = pd.to_datetime(m["created_at"]).strftime("%d/%m %H:%M")
+
+            history_data.append(
+                {"Date": date_str, "Résultat": result_str, "Adversaire": opponent_name}
+            )
+
+        st.dataframe(
+            pd.DataFrame(history_data), use_container_width=True, hide_index=True
+        )
 
 elif page == "🎯 Déclarer un match":
     st.header("🎯 Enregistrer un résultat")

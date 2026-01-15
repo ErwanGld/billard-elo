@@ -17,6 +17,10 @@ st.set_page_config(
 db = DBManager()
 cookie_manager = stx.CookieManager()
 
+# Initialisation du drapeau de déconnexion ---
+if "logout_clicked" not in st.session_state:
+    st.session_state.logout_clicked = False
+
 # --- STYLE CSS ---
 st.markdown(
     """
@@ -34,23 +38,31 @@ st.markdown(
 if "user_data" not in st.session_state:
     st.session_state.user_data = None
 
-# Tentative de reconnexion automatique via Cookies ou Session Supabase
-if st.session_state.user_data is None:
-    # 1. On vérifie d'abord les cookies
-    saved_user_id = cookie_manager.get("bb_user_id")
+# Tentative de reconnexion automatique via Cookies SÉCURISÉS
+if st.session_state.user_data is None and not st.session_state.logout_clicked:
+    # 1. On récupère les tokens cryptés
+    access_token = cookie_manager.get("bb_access_token")
+    refresh_token = cookie_manager.get("bb_refresh_token")
 
-    if saved_user_id:
+    if access_token and refresh_token:
         try:
-            user_profile = (
-                db.supabase.table("profiles")
-                .select("*")
-                .eq("id", saved_user_id)
-                .single()
-                .execute()
-            )
-            if user_profile.data:
-                st.session_state.user_data = user_profile.data
+            # 2. On restaure la session Supabase avec ces tokens
+            # Cela vérifie automatiquement si le token est valide et non falsifié
+            session = db.supabase.auth.set_session(access_token, refresh_token)
+
+            # 3. Si la session est valide, on récupère l'utilisateur
+            if session and session.user:
+                user_profile = (
+                    db.supabase.table("profiles")
+                    .select("*")
+                    .eq("id", session.user.id)
+                    .single()
+                    .execute()
+                )
+                if user_profile.data:
+                    st.session_state.user_data = user_profile.data
         except Exception:
+            # Si le token est expiré ou invalide (tentative de hack), on ne fait rien
             pass
 
     # 2. Si toujours rien, on tente de récupérer la session active Supabase
@@ -78,14 +90,31 @@ if st.session_state.user_data is None:
         with st.form("login_form"):
             email = st.text_input("Email")
             pwd = st.text_input("Mot de passe", type="password")
-            if st.form_submit_button("Se connecter"):
+
+            # 1. On capture le clic dans une variable 'submitted'
+            submitted = st.form_submit_button("Se connecter")
+
+            if submitted:
+                auth_success = False  # On initialise le succès à Faux
+
                 try:
                     auth_res = db.log_in(email, pwd)
+
+                    # SÉCURITÉ : On stocke les tokens (clés cryptées) et non l'ID brut
+                    if auth_res.session:
+                        cookie_manager.set(
+                            "bb_access_token",
+                            auth_res.session.access_token,
+                            key="set_access",
+                        )
+                        cookie_manager.set(
+                            "bb_refresh_token",
+                            auth_res.session.refresh_token,
+                            key="set_refresh",
+                        )
+
+                    # On récupère le profil
                     user_id = auth_res.user.id
-
-                    # Sauvegarde du cookie pour 30 jours
-                    cookie_manager.set("bb_user_id", user_id, key="set_cookie_login")
-
                     user_profile = (
                         db.supabase.table("profiles")
                         .select("*")
@@ -94,17 +123,28 @@ if st.session_state.user_data is None:
                         .execute()
                     )
                     st.session_state.user_data = user_profile.data
+
+                    # Si on arrive ici sans erreur, on valide le succès
+                    auth_success = True
+
+                except:
+                    st.error("Identifiants incorrects ou erreur technique.")
+
+                # 2. Le redémarrage se fait EN DEHORS du try/except
+                # Cela empêche le message rouge d'apparaître en même temps que le vert
+                if auth_success:
+                    st.session_state.logout_clicked = False
                     st.success("Connexion réussie !")
                     st.rerun()
-                except Exception:
-                    st.error("Identifiants incorrects ou compte non vérifié.")
 
     with tab2:
         st.info("⚠️ Un code d'invitation est requis pour s'inscrire.")
         with st.form("signup_form"):
             new_email = st.text_input("Email")
             new_pwd = st.text_input("Mot de passe (6 caractères min.)", type="password")
-            new_pseudo = st.text_input("Prénom Nom (obligatoirement sinon le compte sera supprimé)")
+            new_pseudo = st.text_input(
+                "Prénom Nom (obligatoirement sinon le compte sera supprimé)"
+            )
             user_invite_code = st.text_input(
                 "Code d'invitation secret", type="password"
             )
@@ -160,11 +200,26 @@ if user.get("is_admin"):
 
 page = st.sidebar.radio("Navigation", menu_options)
 
-# BOUTON DÉCONNEXION CORRIGÉ
+# BOUTON DÉCONNEXION ROBUSTE
 if st.sidebar.button("Déconnexion"):
-    cookie_manager.delete("bb_user_id")
+    # 1. On supprime les tokens (ceux-là existent forcément si on est connecté)
+    cookie_manager.delete("bb_access_token", key="del_access")
+    cookie_manager.delete("bb_refresh_token", key="del_refresh")
+
+    # 2. On essaie de supprimer l'ancien cookie ID (nettoyage)
+    # On met un try/except pour éviter le crash si le cookie n'existe déjà plus
+    try:
+        cookie_manager.delete("bb_user_id", key="del_user")
+    except KeyError:
+        pass  # Le cookie n'existe pas ? Pas grave, on passe à la suite.
+
+    # 3. Déconnexion Supabase et nettoyage session
     db.supabase.auth.sign_out()
     st.session_state.user_data = None
+
+    # 4. Drapeau anti-reconnexion
+    st.session_state.logout_clicked = True
+
     st.rerun()
 
 # --- LOGIQUE DES PAGES ---

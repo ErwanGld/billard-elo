@@ -637,3 +637,71 @@ elif page == "🔧 Panel Admin":
         c2.download_button(
             "📥 Backup Matchs", csv_match, "backup_matches.csv", "text/csv"
         )
+
+    # --- SECTION DE SYNCHRONISATION (NOUVEAU) ---
+    st.divider()
+    st.subheader("🔄 Synchronisation des Scores")
+    st.info("Utile si vous voyez une différence entre le classement et la courbe.")
+
+    if st.button("Recalculer tous les Elo (Reset & Replay) ⚠️"):
+        status_text = st.empty()
+        status_text.text("⏳ Démarrage du recalcul...")
+        progress_bar = st.progress(0)
+
+        # 1. On récupère TOUS les matchs validés (ordre chronologique)
+        matches = (
+            db.supabase.table("matches")
+            .select("*")
+            .eq("status", "validated")
+            .order("created_at", desc=False)
+            .execute()
+            .data
+        )
+
+        # 2. On récupère tous les joueurs
+        players = db.get_leaderboard().data
+
+        # 3. Dictionnaire temporaire pour refaire les calculs
+        # On remet tout le monde à 1000 pour commencer
+        temp_elo = {p["id"]: 1000 for p in players}
+        matches_played = {p["id"]: 0 for p in players}  # Pour compter les matchs
+
+        engine = EloEngine()
+
+        total_matches = len(matches)
+
+        # 4. On rejoue l'histoire match par match
+        for i, m in enumerate(matches):
+            w_id = m["winner_id"]
+            l_id = m["loser_id"]
+
+            # Si un joueur a été supprimé entre temps, on ignore
+            if w_id not in temp_elo or l_id not in temp_elo:
+                continue
+
+            w_elo = temp_elo[w_id]
+            l_elo = temp_elo[l_id]
+
+            new_w, new_l, _ = engine.compute_new_ratings(w_elo, l_elo, 0, 0)
+
+            temp_elo[w_id] = new_w
+            temp_elo[l_id] = new_l
+            matches_played[w_id] += 1
+            matches_played[l_id] += 1
+
+            # Barre de progression
+            progress_bar.progress((i + 1) / total_matches)
+
+        status_text.text("💾 Sauvegarde des nouveaux scores dans la base...")
+
+        # 5. On met à jour la base de données (Profils)
+        for p_id, final_elo in temp_elo.items():
+            db.supabase.table("profiles").update(
+                {"elo_rating": final_elo, "matches_played": matches_played[p_id]}
+            ).eq("id", p_id).execute()
+
+        progress_bar.empty()
+        status_text.success(
+            "✅ Tout le monde a été synchronisé avec l'historique exact !"
+        )
+        st.balloons()

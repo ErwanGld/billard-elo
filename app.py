@@ -223,6 +223,7 @@ menu_options = [
     "🆚 Historique des Parties",
     "📑 Mes validations",
     "📜 Règlement",
+    "⚙️ Paramètres",
 ]
 if user.get("is_admin"):
     menu_options.append("🔧 Panel Admin")
@@ -276,22 +277,32 @@ elif page == "🏆 Classement":
 
         df = pd.DataFrame(res.data)
 
-        # --- LE FILTRE MAGIQUE ICI ---
-        # On ne garde que les lignes où la colonne target_matches est supérieure à 0
+        # --- LE FILTRE MAGIQUE ---
+        # On ne garde que les joueurs actifs (> 0 match)
         df = df[df[target_matches] > 0]
 
-        # Si après le filtre le tableau est vide (ex: personne n'a fait de 2v2)
         if df.empty:
             st.info("Aucun joueur classé (0 match joué) pour le moment dans ce mode.")
         else:
+            # --- MASQUAGE DES NOMS (PRIVACY) ---
+            # On remplace le pseudo par "Joueur Masqué" si l'option est activée
+            # et que ce n'est pas moi-même qui regarde.
+            def anonymize(row):
+                # on utilise .get() pour éviter le crash si la colonne n'existe pas encore
+                if row.get("is_hidden_leaderboard", False) and row["id"] != user["id"]:
+                    return "🕵️ Joueur Masqué"
+                return row["username"]
+
+            df["username"] = df.apply(anonymize, axis=1)
+            # -----------------------------------
+
             # 4. Création du tableau propre
             display_df = df[["username", target_elo, target_matches]].copy()
 
             # On renomme les colonnes
             display_df.columns = ["Joueur", "Points Elo", "Matchs"]
 
-            # IMPORTANT : On reset l'index pour que le classement reparte de 1, 2, 3...
-            # Sinon, si le 1er et le 2ème ont 0 match, le tableau commencerait à "3".
+            # Reset de l'index pour avoir un classement 1, 2, 3...
             display_df.reset_index(drop=True, inplace=True)
             display_df.index = display_df.index + 1
 
@@ -326,6 +337,14 @@ elif page == "👤 Profils Joueurs":
         "Voir le profil de :", options, index=default_index
     )
     target_user = players_map[selected_username]
+
+    # --- SÉCURITÉ : BLOCAGE SI PROFIL PRIVÉ ---
+    # Si le profil est caché ET que ce n'est pas le mien -> ON BLOQUE TOUT
+    if target_user.get("is_hidden_profile", False) and target_user["id"] != user["id"]:
+        st.warning(f"🔒 Le profil de {target_user['username']} est privé.")
+        st.info("L'utilisateur a choisi de masquer ses statistiques et son historique.")
+        st.stop()  # Arrête l'exécution ici, n'affiche rien d'autre
+    # ------------------------------------------
 
     st.header(f"👤 Profil de {target_user['username']}")
 
@@ -368,7 +387,6 @@ elif page == "👤 Profils Joueurs":
         if is_involved:
             match_counter += 1
             # Formatage Date et Heure
-            # Astuce: Ajouter .tz_convert('Europe/Paris') si besoin
             date_display = pd.to_datetime(m["created_at"]).strftime("%d/%m %Hh%M")
 
             # Est-ce une victoire ?
@@ -420,7 +438,7 @@ elif page == "👤 Profils Joueurs":
         )
         st.altair_chart(chart, use_container_width=True)
 
-        # B. Les Statistiques (C'est ICI que ça change)
+        # B. Les Statistiques
         current_elo = target_elo_curve[-1]["Elo"]
         diff_total = current_elo - 1000
 
@@ -444,7 +462,7 @@ elif page == "👤 Profils Joueurs":
     # --- 5. HISTORIQUE RÉCENT ---
     st.subheader(f"🗓️ Derniers Matchs ({view_mode})")
 
-    # On filtre pour ne garder que les matchs du joueur (déjà fait dans la boucle mais on refait propre pour l'affichage inversé)
+    # On filtre pour ne garder que les matchs du joueur
     my_matches = []
     for m in all_validated_matches:
         if (
@@ -470,7 +488,6 @@ elif page == "👤 Profils Joueurs":
             )
 
             res_str = "✅ VICTOIRE" if is_win else "❌ DÉFAITE"
-            # Affichage de l'heure ici aussi
             date_str = pd.to_datetime(m["created_at"]).strftime("%d/%m à %Hh%M")
             points = m.get("elo_gain", 0)
             sign = "+" if is_win else "-"
@@ -1054,3 +1071,38 @@ elif page == "🔧 Panel Admin":
             "✅ Tout le monde a été synchronisé avec l'historique exact !"
         )
         st.balloons()
+
+elif page == "⚙️ Paramètres":
+    st.header("⚙️ Paramètres de confidentialité")
+
+    with st.form("privacy_form"):
+        st.write("Gérez la visibilité de votre compte :")
+
+        # On récupère les valeurs actuelles (ou False par défaut)
+        current_hide_lb = user.get("is_hidden_leaderboard", False)
+        current_hide_prof = user.get("is_hidden_profile", False)
+
+        # Les interrupteurs
+        new_hide_lb = st.toggle(
+            "Masquer mon nom dans le classement",
+            value=current_hide_lb,
+            help="Votre nom sera remplacé par 'Joueur Masqué'.",
+        )
+        new_hide_prof = st.toggle(
+            "Rendre mon profil privé",
+            value=current_hide_prof,
+            help="Les autres joueurs ne pourront pas voir vos détails et graphiques.",
+        )
+
+        if st.form_submit_button("Enregistrer les modifications"):
+            success, msg = db.update_user_privacy(
+                user["id"], new_hide_lb, new_hide_prof
+            )
+            if success:
+                st.success("✅ " + msg)
+                # On met à jour la session pour que l'effet soit immédiat
+                user["is_hidden_leaderboard"] = new_hide_lb
+                user["is_hidden_profile"] = new_hide_prof
+                st.rerun()
+            else:
+                st.error("❌ " + msg)

@@ -358,3 +358,13 @@ class DBManager:
 
         except Exception as e:
             return False, f"Erreur lors de la validation : {str(e)}"
+
+    def update_user_privacy(self, user_id, hide_lb, hide_prof):
+        """Met à jour les préférences de confidentialité"""
+        try:
+            self.supabase.table("profiles").update(
+                {"is_hidden_leaderboard": hide_lb, "is_hidden_profile": hide_prof}
+            ).eq("id", user_id).execute()
+            return True, "Préférences mises à jour !"
+        except Exception as e:
+            return False, str(e)

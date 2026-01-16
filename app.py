@@ -961,6 +961,8 @@ elif page == "📜 Règlement":
 
 elif page == "🔧 Panel Admin":
     st.header("🔧 Outils d'administration")
+
+    # --- GESTION DES MATCHS (Inchangé) ---
     all_matches = db.get_all_matches().data
     status_filter = st.multiselect(
         "Statuts :",
@@ -980,74 +982,62 @@ elif page == "🔧 Panel Admin":
                 with st.expander(
                     f"Match {m['status'].upper()} - {m['winner']['username']} vs {m['loser']['username']}"
                 ):
-                    # --- CAS 1 : LITIGE ---
-                    if m["status"] == "disputed":
-                        st.error("⚖️ LITIGE DÉCLARÉ")
-                        c1, c2 = st.columns(2)
+                    c1, c2 = st.columns(2)
+                    if m["status"] == "pending":
+                        if c1.button("Forcer Validation ✅", key=f"adm_val_{m['id']}"):
+                            db.validate_match_logic(m["id"])
+                            st.rerun()
+                        if c2.button("Supprimer 🗑️", key=f"adm_del_{m['id']}"):
+                            db.reject_match(m["id"])
+                            st.rerun()
+                    elif m["status"] == "disputed":
                         if c1.button("Forcer Validation ✅", key=f"f_v_{m['id']}"):
                             db.validate_match_logic(m["id"])
                             st.rerun()
                         if c2.button("Confirmer Rejet ❌", key=f"f_r_{m['id']}"):
                             db.reject_match(m["id"])
                             st.rerun()
-
-                    # --- CAS 2 : EN ATTENTE
-                    elif m["status"] == "pending":
-                        st.info("⏳ EN ATTENTE DE VALIDATION")
-                        st.write("Ce match n'a pas encore été confirmé par le perdant.")
-
-                        c1, c2 = st.columns(2)
-                        # L'admin valide à la place du joueur
-                        if c1.button("Forcer Validation ✅", key=f"adm_val_{m['id']}"):
-                            db.validate_match_logic(m["id"])
-                            st.rerun()
-
-                        # L'admin supprime le match (spam/erreur)
-                        if c2.button("Supprimer le match 🗑️", key=f"adm_del_{m['id']}"):
-                            db.reject_match(m["id"])
-                            st.rerun()
-
-                    # --- CAS 3 : VALIDÉ ---
                     elif m["status"] == "validated":
-                        st.warning("Match validé. Points transférés.")
                         if st.button("Révoquer le match ⚠️", key=f"rev_{m['id']}"):
-                            success, msg = db.revoke_match(m["id"])
-                            if success:
-                                st.rerun()
+                            db.revoke_match(m["id"])
+                            st.rerun()
 
-    # --- AJOUT BOUTON BACKUP ---
     st.divider()
+
+    # --- SAUVEGARDE (Inchangé) ---
     st.subheader("💾 Sauvegarde de sécurité")
     if st.button("Préparer les fichiers de sauvegarde"):
-        # 1. Récupérer les profils
         profiles = db.supabase.table("profiles").select("*").execute().data
         df_prof = pd.DataFrame(profiles)
-        csv_prof = df_prof.to_csv(index=False).encode("utf-8")
-
-        # 2. Récupérer les matchs
         matches = db.supabase.table("matches").select("*").execute().data
         df_match = pd.DataFrame(matches)
-        csv_match = df_match.to_csv(index=False).encode("utf-8")
 
         c1, c2 = st.columns(2)
         c1.download_button(
-            "📥 Backup Joueurs", csv_prof, "backup_profiles.csv", "text/csv"
+            "📥 Backup Joueurs",
+            df_prof.to_csv(index=False).encode("utf-8"),
+            "backup_profiles.csv",
+            "text/csv",
         )
         c2.download_button(
-            "📥 Backup Matchs", csv_match, "backup_matches.csv", "text/csv"
+            "📥 Backup Matchs",
+            df_match.to_csv(index=False).encode("utf-8"),
+            "backup_matches.csv",
+            "text/csv",
         )
 
-    # --- SECTION DE SYNCHRONISATION (NOUVEAU) ---
     st.divider()
+
+    # --- SYNCHRONISATION (VERSION CORRIGÉE 1v1 + 2v2) ---
     st.subheader("🔄 Synchronisation des Scores")
-    st.info("Utile si vous voyez une différence entre le classement et la courbe.")
+    st.info("Recalcule l'intégralité des scores (Solo et Duo) depuis le début.")
 
     if st.button("Recalculer tous les Elo (Reset & Replay) ⚠️"):
         status_text = st.empty()
         status_text.text("⏳ Démarrage du recalcul...")
         progress_bar = st.progress(0)
 
-        # 1. On récupère TOUS les matchs validés (ordre chronologique)
+        # 1. On récupère TOUS les matchs validés
         matches = (
             db.supabase.table("matches")
             .select("*")
@@ -1060,48 +1050,89 @@ elif page == "🔧 Panel Admin":
         # 2. On récupère tous les joueurs
         players = db.get_leaderboard().data
 
-        # 3. Dictionnaire temporaire pour refaire les calculs
-        # On remet tout le monde à 1000 pour commencer
-        temp_elo = {p["id"]: 1000 for p in players}
-        matches_played = {p["id"]: 0 for p in players}  # Pour compter les matchs
+        # 3. ON SÉPARE LES COMPTEURS (C'est ici la différence !)
+        temp_elo_1v1 = {p["id"]: 1000 for p in players}
+        matches_1v1 = {p["id"]: 0 for p in players}
+
+        temp_elo_2v2 = {p["id"]: 1000 for p in players}
+        matches_2v2 = {p["id"]: 0 for p in players}
 
         engine = EloEngine()
-
         total_matches = len(matches)
 
         # 4. On rejoue l'histoire match par match
         for i, m in enumerate(matches):
-            w_id = m["winner_id"]
-            l_id = m["loser_id"]
+            mode = m.get("mode", "1v1")
 
-            # Si un joueur a été supprimé entre temps, on ignore
-            if w_id not in temp_elo or l_id not in temp_elo:
-                continue
+            # --- LOGIQUE 1v1 ---
+            if mode == "1v1":
+                w_id, l_id = m["winner_id"], m["loser_id"]
+                # Sécurité si un joueur a été supprimé
+                if w_id in temp_elo_1v1 and l_id in temp_elo_1v1:
+                    new_w, new_l, _ = engine.compute_new_ratings(
+                        temp_elo_1v1[w_id], temp_elo_1v1[l_id], 0, 0
+                    )
+                    temp_elo_1v1[w_id] = new_w
+                    temp_elo_1v1[l_id] = new_l
+                    matches_1v1[w_id] += 1
+                    matches_1v1[l_id] += 1
 
-            w_elo = temp_elo[w_id]
-            l_elo = temp_elo[l_id]
+            # --- LOGIQUE 2v2 ---
+            elif mode == "2v2":
+                ids = [m["winner_id"], m["winner2_id"], m["loser_id"], m["loser2_id"]]
 
-            new_w, new_l, _ = engine.compute_new_ratings(w_elo, l_elo, 0, 0)
+                # On vérifie que les 4 joueurs existent encore
+                if all(pid in temp_elo_2v2 for pid in ids if pid):
+                    # Moyenne équipe gagnante
+                    w_avg = (
+                        temp_elo_2v2[m["winner_id"]] + temp_elo_2v2[m["winner2_id"]]
+                    ) / 2
+                    # Moyenne équipe perdante
+                    l_avg = (
+                        temp_elo_2v2[m["loser_id"]] + temp_elo_2v2[m["loser2_id"]]
+                    ) / 2
 
-            temp_elo[w_id] = new_w
-            temp_elo[l_id] = new_l
-            matches_played[w_id] += 1
-            matches_played[l_id] += 1
+                    # Calcul du delta
+                    _, _, delta = engine.compute_new_ratings(w_avg, l_avg, 0, 0)
+
+                    # Application aux gagnants
+                    for pid in [m["winner_id"], m["winner2_id"]]:
+                        temp_elo_2v2[pid] += delta
+                        matches_2v2[pid] += 1
+
+                    # Application aux perdants
+                    for pid in [m["loser_id"], m["loser2_id"]]:
+                        temp_elo_2v2[pid] -= delta
+                        matches_2v2[pid] += 1
 
             # Barre de progression
-            progress_bar.progress((i + 1) / total_matches)
+            if total_matches > 0:
+                progress_bar.progress((i + 1) / total_matches)
 
         status_text.text("💾 Sauvegarde des nouveaux scores dans la base...")
 
         # 5. On met à jour la base de données (Profils)
-        for p_id, final_elo in temp_elo.items():
-            db.supabase.table("profiles").update(
-                {"elo_rating": final_elo, "matches_played": matches_played[p_id]}
-            ).eq("id", p_id).execute()
+        # On consolide tous les IDs
+        all_ids = set(temp_elo_1v1.keys()) | set(temp_elo_2v2.keys())
+
+        for p_id in all_ids:
+            updates = {}
+            # Mise à jour 1v1
+            if p_id in temp_elo_1v1:
+                updates["elo_rating"] = temp_elo_1v1[p_id]
+                updates["matches_played"] = matches_1v1[p_id]
+
+            # Mise à jour 2v2
+            if p_id in temp_elo_2v2:
+                updates["elo_2v2"] = temp_elo_2v2[p_id]
+                updates["matches_2v2"] = matches_2v2[p_id]
+
+            if updates:
+                db.supabase.table("profiles").update(updates).eq("id", p_id).execute()
 
         progress_bar.empty()
         status_text.success(
-            "✅ Tout le monde a été synchronisé avec l'historique exact !"
+            "✅ Synchronisation terminée ! Les classements Solo et Duo sont à jour."
         )
         st.balloons()
 

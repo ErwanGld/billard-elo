@@ -896,12 +896,12 @@ elif page == "📑 Mes validations":
 
 elif page == "📢 Nouveautés":
     st.header("📢 Nouveautés & Mises à jour")
-    
+
     # --- MISE A JOUR V2.0 ---
     with st.container(border=True):
         st.subheader("🚀 Mise à jour v2.0 : L'ère du Duo et de la Confidentialité")
         st.caption("Déployée le 16 Janvier 2026")
-        
+
         st.markdown(
             """
             Chers joueurs, une mise à jour majeure vient d'être déployée ! Voici ce qui change :
